@@ -92,8 +92,6 @@ local DEVICE_SETTINGS = {
 	}
 }
 
-
-
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
@@ -103,7 +101,6 @@ local function getDeviceSettings()
 		and DEVICE_SETTINGS.Mobile 
 		or DEVICE_SETTINGS.Desktop
 end
-
 
 --// this calculates all scaled values dynamically using the viewport size, this keeps the notifications visually consistent over different resolutions.
 local function getScaledSettings()
@@ -196,12 +193,9 @@ end
 local function calculateNotificationSize(currentSettings: table, message: string)
 	-- determine device type for potential future adjustments
 	local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
-	
 	local screenWidth = Camera.ViewportSize.X
-	
 	-- width is a percentage but never exceeds MaxWidth, this allows responsive design AND predictable max limit
 	local fixedWidth = math.min(screenWidth * currentSettings.WidthPercentage, currentSettings.MaxWidth)
-	
 	-- remaining width once icon, canvas bar, and padding are removed
 	local textAvailableWidth = fixedWidth - (currentSettings.ImageSize + currentSettings.CanvasWidth + currentSettings.Padding * 3)
 
@@ -240,15 +234,12 @@ local function calculateNotificationSize(currentSettings: table, message: string
 	}
 end
 
-
 --// recalculates layout for every currently active notification, triggered on viewport size change to maintain responsive design
 local function resizeAllNotifications()
 	local container = playerGui:FindFirstChild("NotificationGui") and playerGui.NotificationGui.MainContainer
 	if not container then return end
 
 	local currentSettings = getScaledSettings()
-
-
 	-- update spacing between notifications
 	local layout = container:FindFirstChild("UIListLayout")
 	if layout then
@@ -308,7 +299,6 @@ local function resizeAllNotifications()
 	end
 end
 
-
 --// creates the top level ScreenGui and the frame container that holds notifications. 
 --// and why a separate container you may ask? well UIListLayouts sorts notifications vertically and we can safely destroy the whole system if no notifications remain
 local function createMainContainer()
@@ -350,7 +340,6 @@ local function createMainContainer()
 			end
 		end
 	end)
-
 	-- dynamic rescaling when viewport changes
 	local viewportConnection = Camera:GetPropertyChangedSignal("ViewportSize"):Connect(resizeAllNotifications)
 	
@@ -365,24 +354,29 @@ local function createMainContainer()
 	return container
 end
 
+--// this plays the correct sound based on the notification type. 
+--// the reason the sound is put in a folder is because sounds inside a ScreenGui replicate instantly to the local client and destroying them after playback prevents memory buildup. 
 local function playSound(notificationType: string)
 	local notificationGui = playerGui:FindFirstChild("NotificationGui")
 	if not notificationGui then return end
 	local soundsFolder = notificationGui:FindFirstChild("Sounds")
 	if not soundsFolder then return end
 
+	-- creates a temporary sound instance
 	local sound = Instance.new("Sound")
 	sound.Volume = 0.1
 	sound.SoundId = NOTIFICATION_SETTINGS.SOUND_IDS[notificationType:lower()]
 	sound.Name = notificationType:sub(1, 1):upper() .. notificationType:sub(2) .. "_Sound"
 	sound.Parent = soundsFolder
-
 	sound:Play()
+	-- destroy after playing to avoid memory clutter
 	sound.Ended:Connect(function()
 		sound:Destroy()
 	end)
 end
 
+--// entry animation, grows from 0 to full size.
+--// and here we use tweenservice so we can get a smooth transition and it avoids instant popping and maintains theme consistency
 local function animateIn(element: Frame, targetSize: UDim2)
 	if not element:IsA("Frame") then return end
 	local container = element.Parent
@@ -390,6 +384,8 @@ local function animateIn(element: Frame, targetSize: UDim2)
 	TweenService:Create(element, ANIMATION_SETTINGS, {Size = targetSize}):Play()
 end
 
+--// exit animation, shrinks to small bar then destroys
+--// After finishing, calls callback (used to destroy container if empty)
 local function animateOut(element: Frame, callback: () -> ())
 	local notificationTween = TweenService:Create(element, ANIMATION_SETTINGS, {Size = UDim2.fromOffset(0, 6.7)})
 
@@ -402,22 +398,28 @@ local function animateOut(element: Frame, callback: () -> ())
 	notificationTween:Play()
 end
 
+--// builds the notification frame and returns it
+--// why use a builder function? well it gives clean separation of UI construction from logic and reusable if new variants are added (input fields, progress bars, etc.)
 local function createNotificationFrame(notificationType: string, isExecutedFunction: boolean)
 	local currentSettings = getScaledSettings()
 	
 	local frame = Instance.new("Frame")
 	frame.BackgroundColor3 = NOTIFICATION_SETTINGS.NOTIFICATION_COLORS[notificationType:lower()]
-	frame.Size = UDim2.fromOffset(0, 0)
+	frame.Size = UDim2.fromOffset(0, 0) -- start small for animation
 	frame.AnchorPoint = Vector2.new(0.5, 0.5)
 	frame.BackgroundTransparency = NOTIFICATION_SETTINGS.TRANSPARENCIES[notificationType]
 	frame.ClipsDescendants = true
 	frame.Name = notificationType:sub(1, 1):upper() .. notificationType:sub(2) .. "_Notification"
+
+	-- if the notification is tied to a function execution then we move it to the bottom
 	frame.LayoutOrder = isExecutedFunction and math.huge or os.time()
 
+	-- gives it the rounded/pill shape
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(10, currentSettings.CornerRadius)
 	corner.Parent = frame
 
+	-- this gives us a horizontal layout
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Horizontal
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -426,6 +428,7 @@ local function createNotificationFrame(notificationType: string, isExecutedFunct
 	layout.VerticalAlignment = Enum.VerticalAlignment.Center
 	layout.Parent = frame
 
+	-- padding on all sides of the notification
 	local padding = Instance.new("UIPadding")
 	padding.PaddingLeft = UDim.new(0, currentSettings.Padding)
 	padding.PaddingRight = UDim.new(0, currentSettings.Padding)
@@ -436,7 +439,9 @@ local function createNotificationFrame(notificationType: string, isExecutedFunct
 	return frame
 end
 
+--// core logic that builds, animates, and manages notification lifetime
 local function showNotification(notificationType: string, message: string, duration: number, executedFunction: () -> nil)
+	-- input validation ensures silent fail instead of throwing errors.
 	if type(notificationType) ~= "string" or type(message) ~= "string" then return end
 	if executedFunction and type(executedFunction) ~= "function" then return end
 	if duration and type(duration) ~= "number" then return end
@@ -444,6 +449,7 @@ local function showNotification(notificationType: string, message: string, durat
 	local isExecutedFunction = executedFunction and true or false
 	notificationType = notificationType:lower()
 
+	-- validate the notification type exists
 	local isValidType = false
 	for _, currentType in pairs(NOTIFICATION_SETTINGS.NOTIFICATION_TYPES) do
 		if string.lower(currentType) == string.lower(notificationType) then
@@ -452,23 +458,27 @@ local function showNotification(notificationType: string, message: string, durat
 		end 
 	end
 	if not isValidType then return end
-
+	
 	local currentSettings = getScaledSettings()
+	-- Ensure container exists (creates if needed)
 	local container = playerGui:FindFirstChild("NotificationGui") and playerGui.NotificationGui.MainContainer or createMainContainer()
+	-- calculate sizes for the message
 	local sizeInfo = calculateNotificationSize(currentSettings, message)
-
+	-- creates the main notification frame
 	local frame = createNotificationFrame(notificationType, isExecutedFunction)
 
+	-- notification icon
 	local icon = Instance.new("ImageLabel")
 	icon.Image = NOTIFICATION_SETTINGS.IMAGE_IDS[notificationType]
 	icon.Size = UDim2.fromOffset(currentSettings.ImageSize, currentSettings.ImageSize)
 	icon.BackgroundTransparency = 1
-	icon.ImageTransparency = 1
+	icon.ImageTransparency = 1 -- so we can fade it in later
 	icon.LayoutOrder = 0
 	icon.Name = "IconLabel"
 	icon:AddTag("UpdateTransparency")
 	icon.Parent = frame
 
+	-- optional bar that indicates the amount of time left
 	local timeContainer, timeFiller
 	if not isExecutedFunction then
 		timeContainer = Instance.new("Frame")
@@ -476,21 +486,23 @@ local function showNotification(notificationType: string, message: string, durat
 		timeContainer.BackgroundColor3 = Color3.fromRGB(175, 175, 175)
 		timeContainer.BorderSizePixel = 0
 		timeContainer.LayoutOrder = 1
-		timeContainer.Transparency = 1 --// Change to 0.5 if you wish to have a bar indicating time left untill notification is removed.
+		timeContainer.Transparency = 1 -- Change to 0.5 if you wish to have a bar indicating time left untill notification is removed.
 		timeContainer.Name = "TimeLeftContainer"
 
+		-- Filler animates vertically over lifetime
 		timeFiller = Instance.new("Frame")
 		timeFiller.AnchorPoint = Vector2.new(0.5, 1)
 		timeFiller.Size = UDim2.fromScale(1, 1)
 		timeFiller.Position = UDim2.fromScale(0.5, 1)
 		timeFiller.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 		timeFiller.BorderSizePixel = 0
-		timeFiller.Transparency = 1 --// Change to 0 if you wish to have a bar indicating time left untill notification is removed.
+		timeFiller.Transparency = 1 -- Change to 0 if you wish to have a bar indicating time left untill notification is removed.
 		timeFiller.Name = "TimeLeftFiller"
 		timeFiller.Parent = timeContainer
 		timeContainer.Parent = frame
 	end
 
+	-- main text
 	local textLabel = Instance.new("TextLabel")
 	textLabel.Text = message
 	textLabel.Size = UDim2.new(1, -(currentSettings.ImageSize + currentSettings.CanvasWidth + currentSettings.Padding * 3), 1, 0)
@@ -500,61 +512,72 @@ local function showNotification(notificationType: string, message: string, durat
 	textLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 	textLabel.Font = selectedFont
 	textLabel.TextSize = sizeInfo.TextSize
-	textLabel.TextTransparency = 1
+	textLabel.TextTransparency = 1 -- so we can fade it in
 	textLabel.TextWrapped = true
 	textLabel.LayoutOrder = isExecutedFunction and 1 or 2
 	textLabel:AddTag("UpdateTransparency")
 	textLabel.Name = "MessageLabel"
 	textLabel.Parent = frame
 
+	-- gradient that basically fades in the text
 	local textGradient = Instance.new("UIGradient")
 	textGradient.Parent = textLabel
-
+	-- inserts the frame into the container
 	frame.Parent = container
-
+	-- plays the sound
 	playSound(notificationType)
-
+	-- default duration time if none is provided when creating the notification
 	local notificationTime = duration or currentSettings.Duration
-
+	-- animates the text gradient
 	animateGradientTransparency(textGradient, ANIMATION_SETTINGS.Time * 1)
+	-- this animated the timer
 	if not isExecutedFunction then TweenService:Create(timeFiller, TweenInfo.new(notificationTime, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, false, 0), {Size = UDim2.fromScale(1, 0)}):Play() end
+	
+	-- animates the notification entering
 	animateIn(frame, UDim2.fromOffset(sizeInfo.Width, sizeInfo.Height))
 	TweenService:Create(icon, ANIMATION_SETTINGS, {ImageTransparency = 0}):Play()
 	TweenService:Create(textLabel, ANIMATION_SETTINGS, {TextTransparency = 0}):Play()
 
+	-- animated the notification closing
 	local function closeNotification()
 		animateOut(frame, function()
 			frame:Destroy()
+			-- if container only has layout object left then we remove whole GUI
 			if #container:GetChildren() == 1 then
 				container.Parent:Destroy()
 			end
 		end)
+		-- fade out icon & text
 		TweenService:Create(icon, ANIMATION_SETTINGS, {ImageTransparency = 1}):Play()
 		TweenService:Create(textLabel, ANIMATION_SETTINGS, {TextTransparency = 1}):Play()
 	end
-
+	-- if function provided, close notification after it completes
 	if executedFunction then
 		task.spawn(function()
 			pcall(executedFunction)
 			closeNotification()
 		end)
 	else
-		task.delay(notificationTime, closeNotification)
+		task.delay(notificationTime, closeNotification) -- otherwise close after duration
 	end
 end
 
+--// this is simply a wrapper around the internal `showNotification` function. External scripts call this to create notifications without touching internals.
 function notificationHandler:CreateNotification(notificationType: string, message: string, duration: number, executedFunction: () -> nil)
 	showNotification(notificationType, message, duration, executedFunction)
 end
+--// it iterates over every notification frame, plays exit animation on each and destroys UI cleanly when all notifications are gone
 
+--// and why dont we instant destroy? well users expect smooth UX, not sudden UI popping so it reuses the same exit animation logic for consistency
 function notificationHandler:ClearNotifications()
 	local container = playerGui:FindFirstChild("NotificationGui") and playerGui.NotificationGui:FindFirstChild("MainContainer")
 	if not container then return end
-
 	for _, frame in ipairs(container:GetChildren()) do
 		if frame:IsA("Frame") and frame.Name:find("_Notification") then
+			-- uses exiting animation wrapper
 			animateOut(frame, function()
 				frame:Destroy()
+				-- when only UIListLayout remains, delete entire GUI (The container always has at least 1 child (the layout))
 				if #container:GetChildren() == 1 then
 					container.Parent:Destory()
 				end
